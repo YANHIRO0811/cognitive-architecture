@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>人脑三维模型 → 技术机制替换</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#06060f;overflow:hidden;font-family:'PingFang SC','Microsoft YaHei',sans-serif}
+canvas{display:block}
+
+#ui{position:absolute;top:0;left:0;width:100%;pointer-events:none;z-index:10}
+#title-bar{text-align:center;padding:16px}
+#title-bar h1{font-size:1.6em;color:#e0e0f0;letter-spacing:3px;text-shadow:0 0 20px rgba(150,150,255,0.4)}
+#title-bar .sub{color:#777;font-size:.75em;margin-top:4px}
+
+#mode-switch{position:absolute;top:50%;right:20px;transform:translateY(-50%);display:flex;flex-direction:column;gap:8px;pointer-events:all}
+.mode-btn{background:#12122a;border:1px solid #333;color:#888;padding:12px 16px;border-radius:10px;cursor:pointer;font-size:.78em;transition:all .3s;text-align:center;writing-mode:vertical-lr;letter-spacing:2px}
+.mode-btn:hover{background:#1a1a3a;color:#ccc}
+.mode-btn.active{background:#1a1a40;border-color:#666;color:#fff;box-shadow:0 0 12px rgba(100,100,255,0.3)}
+
+#legend{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);display:flex;gap:3px;flex-wrap:wrap;justify-content:center;pointer-events:all;max-width:90%}
+.leg-item{background:rgba(10,10,20,0.85);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:5px 10px;font-size:.65em;color:#aaa;display:flex;align-items:center;gap:5px;backdrop-filter:blur(4px)}
+.leg-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
+#tooltip{position:absolute;pointer-events:none;background:rgba(10,10,24,0.92);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:10px 14px;color:#ddd;font-size:.75em;display:none;max-width:260px;backdrop-filter:blur(8px);z-index:20}
+#tooltip .tt-name{font-weight:700;font-size:.9em;margin-bottom:2px}
+#tooltip .tt-func{color:#999;font-size:.73em;line-height:1.4}
+#tooltip .tt-tech{color:#aaa;font-size:.7em;margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,0.1)}
+
+#info-hint{position:absolute;bottom:80px;left:50%;transform:translateX(-50%);color:#444;font-size:.65em;pointer-events:none}
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div id="title-bar">
+    <h1 id="main-title">🧠 人类大脑三维结构</h1>
+    <div class="sub" id="main-sub">拖拽旋转 · 滚轮缩放 · 右键平移 · 悬停查看详情</div>
+  </div>
+
+  <div id="mode-switch">
+    <button class="mode-btn active" id="btn-anatomy" onclick="switchMode('anatomy')">解剖模型</button>
+    <button class="mode-btn" id="btn-tech" onclick="switchMode('tech')">技术替换</button>
+  </div>
+
+  <div id="legend"></div>
+  <div id="info-hint">🖱 拖拽旋转 · 滚轮缩放 · 悬停脑区看详情</div>
+</div>
+
+<div id="tooltip"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+// ── Scene setup ──
+const scene = new THREE.Scene();
+
+// Subtle gradient background
+const bgColor = new THREE.Color(0x06060f);
+scene.background = bgColor;
+scene.fog = new THREE.Fog(0x06060f, 15, 50);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.5, 100);
+camera.position.set(8, 3, 12);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+document.body.appendChild(renderer.domElement);
+
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(window.innerWidth, window.innerHeight);
+labelRenderer.domElement.style.position = 'absolute';
+labelRenderer.domElement.style.top = '0';
+labelRenderer.domElement.style.pointerEvents = 'none';
+document.body.appendChild(labelRenderer.domElement);
+
+// Orbit controls
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 4;
+controls.maxDistance = 25;
+controls.maxPolarAngle = Math.PI * 0.75;
+controls.target.set(0, 0.5, 0);
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.3;
+
+// ── Lighting ──
+const ambLight = new THREE.AmbientLight(0x222244, 1.5);
+scene.add(ambLight);
+
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.5);
+keyLight.position.set(8, 10, 8);
+keyLight.castShadow = true;
+scene.add(keyLight);
+
+const fillLight = new THREE.DirectionalLight(0x4466aa, 1.2);
+fillLight.position.set(-4, 2, -4);
+scene.add(fillLight);
+
+const rimLight = new THREE.DirectionalLight(0x8866cc, 1.5);
+rimLight.position.set(0, -2, 6);
+scene.add(rimLight);
+
+// ── Particle field ──
+const particlesGeo = new THREE.BufferGeometry();
+const particlesCount = 400;
+const posArray = new Float32Array(particlesCount*3);
+for(let i=0;i<particlesCount*3;i+=3){
+  posArray[i]=(Math.random()-0.5)*20;
+  posArray[i+1]=(Math.random()-0.5)*16;
+  posArray[i+2]=(Math.random()-0.5)*20;
+}
+particlesGeo.setAttribute('position',new THREE.BufferAttribute(posArray,3));
+const particlesMat = new THREE.PointsMaterial({size:0.02,color:0x334466,transparent:true,opacity:0.5,blending:THREE.AdditiveBlending});
+const particles = new THREE.Points(particlesGeo,particlesMat);
+scene.add(particles);
+
+// ── Grid ground ──
+const grid = new THREE.GridHelper(14,20,0x111133,0x08081a);
+grid.position.y = -6;
+scene.add(grid);
+
+// ── Brain structures ──
+const structures = [];
+let currentMode = 'anatomy';
+
+const matWhite = new THREE.MeshPhysicalMaterial({color:0xeeeedd,roughness:0.3,metalness:0.05,transparent:true,opacity:0.28,clearcoat:0.1});
+const matFrontal = new THREE.MeshPhysicalMaterial({color:0x5588dd,roughness:0.25,metalness:0.1,transparent:true,opacity:0.55,clearcoat:0.2});
+const matParietal = new THREE.MeshPhysicalMaterial({color:0x44aa66,roughness:0.25,metalness:0.1,transparent:true,opacity:0.55,clearcoat:0.2});
+const matTemporal = new THREE.MeshPhysicalMaterial({color:0xddaa33,roughness:0.25,metalness:0.1,transparent:true,opacity:0.55,clearcoat:0.2});
+const matOccipital = new THREE.MeshPhysicalMaterial({color:0xdd5544,roughness:0.25,metalness:0.1,transparent:true,opacity:0.55,clearcoat:0.2});
+const matDeep = new THREE.MeshStandardMaterial({color:0x9966cc,roughness:0.3,metalness:0.2,transparent:true,opacity:0.8});
+const matCerebellum = new THREE.MeshStandardMaterial({color:0xcc7755,roughness:0.3,metalness:0.1,transparent:true,opacity:0.7});
+const matAmygdala = new THREE.MeshStandardMaterial({color:0xff3355,roughness:0.3,metalness:0.2,transparent:true,opacity:0.85,emissive:0x330000,emissiveIntensity:0.4});
+const matThalamus = new THREE.MeshStandardMaterial({color:0x9966ff,roughness:0.25,metalness:0.3,transparent:true,opacity:0.8,emissive:0x110022,emissiveIntensity:0.3});
+const matHippocampus = new THREE.MeshStandardMaterial({color:0x6699cc,roughness:0.3,metalness:0.15,transparent:true,opacity:0.78,emissive:0x001122,emissiveIntensity:0.3});
+const matACC = new THREE.MeshStandardMaterial({color:0xff9944,roughness:0.3,metalness:0.2,transparent:true,opacity:0.75,emissive:0x220000,emissiveIntensity:0.3});
+const matInsula = new THREE.MeshStandardMaterial({color:0x44cc88,roughness:0.3,metalness:0.2,transparent:true,opacity:0.75,emissive:0x001100,emissiveIntensity:0.3});
+const matBG = new THREE.MeshStandardMaterial({color:0xcc9944,roughness:0.3,metalness:0.2,transparent:true,opacity:0.8});
+const matMotor = new THREE.MeshStandardMaterial({color:0x44bb77,roughness:0.25,metalness:0.3,transparent:true,opacity:0.7,emissive:0x002211,emissiveIntensity:0.3});
+
+// Tech materials
+const techAmygdala = new THREE.MeshStandardMaterial({color:0xff2040,roughness:0.2,metalness:0.5,transparent:true,opacity:0.9,emissive:0x440000,emissiveIntensity:0.7});
+const techThalamus = new THREE.MeshStandardMaterial({color:0x8855ff,roughness:0.2,metalness:0.5,transparent:true,opacity:0.85,emissive:0x110033,emissiveIntensity:0.5});
+const techFrontal = new THREE.MeshPhysicalMaterial({color:0x4488ee,roughness:0.15,metalness:0.3,transparent:true,opacity:0.6,clearcoat:0.3,emissive:0x001133,emissiveIntensity:0.3});
+const techParietal = new THREE.MeshPhysicalMaterial({color:0x33cc55,roughness:0.15,metalness:0.3,transparent:true,opacity:0.6,clearcoat:0.3,emissive:0x001111,emissiveIntensity:0.3});
+const techTemporal = new THREE.MeshPhysicalMaterial({color:0xee9922,roughness:0.15,metalness:0.3,transparent:true,opacity:0.6,clearcoat:0.3,emissive:0x111100,emissiveIntensity:0.3});
+const techHippocampus = new THREE.MeshStandardMaterial({color:0x44aadd,roughness:0.2,metalness:0.4,transparent:true,opacity:0.82,emissive:0x002233,emissiveIntensity:0.5});
+const techACC = new THREE.MeshStandardMaterial({color:0xff8822,roughness:0.2,metalness:0.4,transparent:true,opacity:0.8,emissive:0x331100,emissiveIntensity:0.5});
+const techInsula = new THREE.MeshStandardMaterial({color:0x22dd66,roughness:0.2,metalness:0.4,transparent:true,opacity:0.8,emissive:0x002200,emissiveIntensity:0.5});
+const techBG = new THREE.MeshStandardMaterial({color:0xdd8822,roughness:0.2,metalness:0.4,transparent:true,opacity:0.85,emissive:0x221100,emissiveIntensity:0.5});
+const techMotor = new THREE.MeshStandardMaterial({color:0x22cc55,roughness:0.15,metalness:0.5,transparent:true,opacity:0.75,emissive:0x003311,emissiveIntensity:0.5});
+
+function createLabel(text, pos, color='#ccc', size='0.6em') {
+  const div = document.createElement('div');
+  div.textContent = text;
+  div.style.color = color;
+  div.style.fontSize = size;
+  div.style.fontWeight = '600';
+  div.style.textShadow = '0 0 8px rgba(0,0,0,0.8)';
+  div.style.whiteSpace = 'nowrap';
+  const label = new CSS2DObject(div);
+  label.position.copy(pos);
+  return label;
+}
+
+// ── Build brain ──
+
+// Main brain shape (cortex)
+const brainGroup = new THREE.Group();
+scene.add(brainGroup);
+
+// Cerebrum - large ellipsoid
+const cerebrumGeo = new THREE.SphereGeometry(2.5, 64, 48);
+cerebrumGeo.scale(1, 0.82, 0.72);
+const cerebrum = new THREE.Mesh(cerebrumGeo, matWhite);
+cerebrum.name = 'cortex';
+brainGroup.add(cerebrum);
+
+// Frontal lobe - front portion
+const frontalGeo = new THREE.SphereGeometry(1.6, 48, 36);
+frontalGeo.scale(1, 0.85, 0.55);
+const frontalMesh = new THREE.Mesh(frontalGeo, matFrontal);
+frontalMesh.position.set(0, 0.15, 1.1);
+frontalMesh.name = 'frontal';
+brainGroup.add(frontalMesh);
+structures.push({mesh:frontalMesh, anatMat:matFrontal, techMat:techFrontal, name:'frontal'});
+
+// Parietal lobe - top portion
+const parietalGeo = new THREE.SphereGeometry(1.5, 40, 30);
+parietalGeo.scale(0.9, 0.45, 0.75);
+const parietalMesh = new THREE.Mesh(parietalGeo, matParietal);
+parietalMesh.position.set(0, 1.25, -0.2);
+parietalMesh.name = 'parietal';
+brainGroup.add(parietalMesh);
+structures.push({mesh:parietalMesh, anatMat:matParietal, techMat:techParietal, name:'parietal'});
+
+// Temporal lobe - left side
+const temporalGeo = new THREE.SphereGeometry(1.3, 36, 28);
+temporalGeo.scale(0.55, 0.6, 0.75);
+const temporalL = new THREE.Mesh(temporalGeo, matTemporal);
+temporalL.position.set(-1.7, -0.35, 0.1);
+temporalL.name = 'temporal_left';
+brainGroup.add(temporalL);
+structures.push({mesh:temporalL, anatMat:matTemporal, techMat:techTemporal, name:'temporal'});
+
+// Temporal lobe - right side  
+const temporalR = new THREE.Mesh(temporalGeo.clone(), matTemporal);
+temporalR.position.set(1.7, -0.35, 0.1);
+temporalR.name = 'temporal_right';
+brainGroup.add(temporalR);
+structures.push({mesh:temporalR, anatMat:matTemporal, techMat:techTemporal, name:'temporal'});
+
+// Occipital lobe - back
+const occipitalGeo = new THREE.SphereGeometry(1.1, 32, 24);
+occipitalGeo.scale(0.75, 0.6, 0.5);
+const occipitalMesh = new THREE.Mesh(occipitalGeo, matOccipital);
+occipitalMesh.position.set(0, 0, -1.6);
+occipitalMesh.name = 'occipital';
+brainGroup.add(occipitalMesh);
+structures.push({mesh:occipitalMesh, anatMat:matOccipital, techMat:matOccipital, name:'occipital'});
+
+// ── Deep structures ──
+const deepGroup = new THREE.Group();
+brainGroup.add(deepGroup);
+
+// Thalamus - center
+const thalamusGeo = new THREE.SphereGeometry(0.45, 32, 24);
+const thalamusL = new THREE.Mesh(thalamusGeo, matThalamus);
+thalamusL.position.set(-0.35, -0.15, -0.1);
+thalamusL.name = 'thalamus_left';
+deepGroup.add(thalamusL);
+structures.push({mesh:thalamusL, anatMat:matThalamus, techMat:techThalamus, name:'thalamus'});
+
+const thalamusR = new THREE.Mesh(thalamusGeo, matThalamus);
+thalamusR.position.set(0.35, -0.15, -0.1);
+thalamusR.name = 'thalamus_right';
+deepGroup.add(thalamusR);
+structures.push({mesh:thalamusR, anatMat:matThalamus, techMat:techThalamus, name:'thalamus'});
+
+// Amygdala - front deep
+const amygdalaGeo = new THREE.SphereGeometry(0.28, 20, 16);
+amygdalaGeo.scale(1, 1.15, 1);
+const amygdalaL = new THREE.Mesh(amygdalaGeo, matAmygdala);
+amygdalaL.position.set(-1.05, -0.45, 0.4);
+amygdalaL.name = 'amygdala_left';
+deepGroup.add(amygdalaL);
+structures.push({mesh:amygdalaL, anatMat:matAmygdala, techMat:techAmygdala, name:'amygdala'});
+
+const amygdalaR = new THREE.Mesh(amygdalaGeo, matAmygdala);
+amygdalaR.position.set(1.05, -0.45, 0.4);
+amygdalaR.name = 'amygdala_right';
+deepGroup.add(amygdalaR);
+structures.push({mesh:amygdalaR, anatMat:matAmygdala, techMat:techAmygdala, name:'amygdala'});
+
+// Hippocampus - curved deep
+const hippoGeo = new THREE.TorusGeometry(0.35, 0.16, 16, 20, Math.PI);
+const hippoL = new THREE.Mesh(hippoGeo, matHippocampus);
+hippoL.position.set(-1.1, -0.5, -0.15);
+hippoL.rotation.set(0, Math.PI*0.4, Math.PI*0.3);
+hippoL.name = 'hippocampus_left';
+deepGroup.add(hippoL);
+structures.push({mesh:hippoL, anatMat:matHippocampus, techMat:techHippocampus, name:'hippocampus'});
+
+const hippoR = new THREE.Mesh(hippoGeo, matHippocampus);
+hippoR.position.set(1.1, -0.5, -0.15);
+hippoR.rotation.set(0, -Math.PI*0.4, -Math.PI*0.3);
+hippoR.name = 'hippocampus_right';
+deepGroup.add(hippoR);
+structures.push({mesh:hippoR, anatMat:matHippocampus, techMat:techHippocampus, name:'hippocampus'});
+
+// ACC - midline top
+const accGeo = new THREE.TorusGeometry(0.55, 0.13, 16, 24, Math.PI*1.2);
+const accMesh = new THREE.Mesh(accGeo, matACC);
+accMesh.position.set(0, 0.3, -0.1);
+accMesh.rotation.set(Math.PI*0.5, 0, Math.PI*0.1);
+accMesh.name = 'acc';
+deepGroup.add(accMesh);
+structures.push({mesh:accMesh, anatMat:matACC, techMat:techACC, name:'acc'});
+
+// Insula (Salience) - small deep spheres 
+const insulaGeo = new THREE.SphereGeometry(0.2, 16, 12);
+const insulaL = new THREE.Mesh(insulaGeo, matInsula);
+insulaL.position.set(-0.9, -0.1, 0.15);
+insulaL.name = 'insula_left';
+deepGroup.add(insulaL);
+structures.push({mesh:insulaL, anatMat:matInsula, techMat:techInsula, name:'insula'});
+
+const insulaR = new THREE.Mesh(insulaGeo, matInsula);
+insulaR.position.set(0.9, -0.1, 0.15);
+insulaR.name = 'insula_right';
+deepGroup.add(insulaR);
+structures.push({mesh:insulaR, anatMat:matInsula, techMat:techInsula, name:'insula'});
+
+// Basal Ganglia
+const bgGeo = new THREE.SphereGeometry(0.3, 20, 16);
+const bgL = new THREE.Mesh(bgGeo, matBG);
+bgL.position.set(-0.6, -0.3, 0.2);
+bgL.name = 'basal_ganglia_left';
+deepGroup.add(bgL);
+structures.push({mesh:bgL, anatMat:matBG, techMat:techBG, name:'basal_ganglia'});
+
+const bgR = new THREE.Mesh(bgGeo, matBG);
+bgR.position.set(0.6, -0.3, 0.2);
+bgR.name = 'basal_ganglia_right';
+deepGroup.add(bgR);
+structures.push({mesh:bgR, anatMat:matBG, techMat:techBG, name:'basal_ganglia'});
+
+// Cerebellum
+const cerebellumGeo = new THREE.SphereGeometry(0.85, 36, 28);
+cerebellumGeo.scale(0.8, 0.5, 0.45);
+const cerebellumMesh = new THREE.Mesh(cerebellumGeo, matCerebellum);
+cerebellumMesh.position.set(0, -0.95, -1.3);
+cerebellumMesh.name = 'cerebellum';
+brainGroup.add(cerebellumMesh);
+structures.push({mesh:cerebellumMesh, anatMat:matCerebellum, techMat:matCerebellum, name:'cerebellum'});
+
+// Motor cortex - strip in front of parietal
+const motorGeo = new THREE.SphereGeometry(1.1, 32, 20);
+motorGeo.scale(0.35, 0.55, 0.45);
+const motorMesh = new THREE.Mesh(motorGeo, matMotor);
+motorMesh.position.set(0, 0.6, 0.9);
+motorMesh.name = 'motor';
+brainGroup.add(motorMesh);
+structures.push({mesh:motorMesh, anatMat:matMotor, techMat:techMotor, name:'motor'});
+
+// ── Labels ──
+const lblGroup = new THREE.Group();
+brainGroup.add(lblGroup);
+
+const labels = [
+  {text:'额叶\n计划·决策', pos:[0,1.7,2.8], color:'#7799dd', size:'0.55em', key:'frontal'},
+  {text:'顶叶\n注意力·空间', pos:[0,2.6,0], color:'#66bb88', size:'0.55em', key:'parietal'},
+  {text:'颞叶\n识别·听觉', pos:[-2.5,0.2,0.5], color:'#ddbb55', size:'0.55em', key:'temporal'},
+  {text:'枕叶\n视觉处理', pos:[0,0.5,-2.6], color:'#dd6655', size:'0.55em', key:'occipital'},
+  {text:'丘脑\n感官路由', pos:[-0.8,0.3,-0.6], color:'#aa88ff', size:'0.5em', key:'thalamus'},
+  {text:'杏仁核\n危机预警', pos:[-1.8,-0.5,0.9], color:'#ff4466', size:'0.5em', key:'amygdala'},
+  {text:'海马体\n记忆', pos:[-1.9,-0.7,-0.5], color:'#77aadd', size:'0.5em', key:'hippocampus'},
+  {text:'扣带回\n冲突监控', pos:[0,1.0,-0.4], color:'#ff9944', size:'0.5em', key:'acc'},
+  {text:'前岛叶\n状态切换', pos:[-1.5,0.3,0.4], color:'#55dd99', size:'0.48em', key:'insula'},
+  {text:'基底节\n习惯·RL', pos:[-1.1,-0.2,0.7], color:'#dd9944', size:'0.48em', key:'basal_ganglia'},
+  {text:'小脑\n技能优化', pos:[0,-1.8,-1.6], color:'#cc8855', size:'0.5em', key:'cerebellum'},
+  {text:'运动皮层\n执行', pos:[0,1.4,1.8], color:'#55cc88', size:'0.5em', key:'motor'},
+];
+labels.forEach(l => {
+  const lo = createLabel(l.text, new THREE.Vector3(...l.pos), l.color, l.size);
+  lo.userData = {key:l.key};
+  lblGroup.add(lo);
+});
+
+// ── Info maps ──
+const infoMap = {
+  frontal: {name:'额叶 前额叶 PFC', func:'执行功能核心——计划、决策、冲动控制、目标导向行为。大脑的CEO。', tech:'LangGraph 图状态机 + AutoGen 多Agent辩论', source:'langchain-ai + microsoft', color:'#7799dd'},
+  parietal: {name:'顶叶 关联皮层', func:'注意力分配、空间加工、身体图式。决定「众多信息中看哪个」。', tech:'Letta(MemGPT) 虚拟上下文 + Mem0 记忆门控', source:'letta-ai + mem0ai', color:'#66bb88'},
+  temporal: {name:'颞叶 WHAT流', func:'腹侧通路——物体识别、语义理解、面孔识别。追问「这是什么？我见过吗？」', tech:'LlamaIndex RAG + Neo4j 知识图谱 + HF零样本分类', source:'run-llama + neo4j + huggingface', color:'#ddbb55'},
+  occipital: {name:'枕叶 视觉皮层', func:'V1→V5层级加工：边缘→颜色→形状→运动→深度。视觉信息逐级抽象。', tech:'Hermes 20平台adapter + 多模态输入解析', source:'NousResearch hermes-agent', color:'#dd6655'},
+  thalamus: {name:'丘脑 Thalamus', func:'感官中继站——分拣视觉·听觉·味觉·触觉信号，决定哪些值得送往皮层。', tech:'Hermes Gateway + LangGraph条件路由', source:'NousResearch + langchain-ai', color:'#aa88ff'},
+  amygdala: {name:'杏仁核 Amygdala 🚨', func:'危机预警——快速通路：毫秒级拦截危险。慢速通路：标记预警往下传。不等任何分析！', tech:'NeMo-Guardrails + LLM-Guard + 安全词库', source:'NVIDIA + laiyer-ai', color:'#ff4466'},
+  hippocampus: {name:'海马体 Hippocampus', func:'情景记忆形成、记忆巩固(睡眠向皮层重放)。三层：STM→摘要→LTM。', tech:'Letta STM/LTM + ChromaDB + Neo4j + Honcho', source:'letta-ai + chroma-core + neo4j', color:'#77aadd'},
+  acc: {name:'扣带回 ACC', func:'冲突监控——检测竞争性反应，5种冲突：情绪vs逻辑/记忆vs计划/创意vs安全…', tech:'ECA ConflictMonitor + HF NLI矛盾检测', source:'EdJb1971 + huggingface', color:'#ff9944'},
+  insula: {name:'前岛叶 突显网络 🔧', func:'检测突出刺激→决定DMN↔CEN切换。5状态：任务/反思/紧急/创意/教学。', tech:'🔧 自研FSM 状态机（唯一需新造的模块）', source:'需新造——ECA Phase7只有设计', color:'#55dd99'},
+  basal_ganglia: {name:'基底节 Basal Ganglia', func:'奖赏学习、习惯形成——Q-Learning + Epsilon-Greedy。20+成功→自动提升为习惯。', tech:'ECA RL Service (Q-Learning + ChromaDB持久化)', source:'EdJb1971', color:'#dd9944'},
+  cerebellum: {name:'小脑 Cerebellum', func:'技能优化——错误驱动改进。7类技能分别追踪，DSPy自动调优Prompt。', tech:'DSPy (Stanford) + Langfuse 监控 + ECA Procedural', source:'stanfordnlp + langfuse + EdJb1971', color:'#cc8855'},
+  motor: {name:'运动皮层 Motor Cortex', func:'执行产出——工具调用、流式输出、20平台分发。', tech:'Hermes 70+tools + MCP协议 + Composio', source:'NousResearch + modelcontextprotocol', color:'#55cc88'},
+};
+
+// ── Tech labels override ──
+const techLabels = {
+  frontal: 'LangGraph\n+AutoGen',
+  parietal: 'Letta\n+Mem0',
+  temporal: 'LlamaIndex\n+Neo4j',
+  occipital: 'Hermes\nAdapters',
+  thalamus: 'Hermes GW\n+LangGraph',
+  amygdala: 'NeMo-Guard\n+LLM-Guard',
+  hippocampus: 'Letta+Chroma\n+Neo4j+Honcho',
+  acc: 'ECA Conflict\n+HF NLI',
+  insula: '🔧 自研\nFSM',
+  basal_ganglia: 'ECA RL\nQ-Learning',
+  cerebellum: 'DSPy\n+Langfuse',
+  motor: 'Hermes tools\n+MCP',
+};
+
+// ── Raycaster ──
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+const tooltip = document.getElementById('tooltip');
+const allClickable = [...structures.map(s=>s.mesh), cerebrum];
+
+window.addEventListener('mousemove', (e) => {
+  mouse.x = (e.clientX/window.innerWidth)*2-1;
+  mouse.y = -(e.clientY/window.innerHeight)*2+1;
+  
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObjects(allClickable, true);
+  
+  if(intersects.length>0){
+    let obj = intersects[0].object;
+    let key = obj.name;
+    if(key.includes('_')) key = key.split('_')[0];
+    
+    const info = infoMap[key];
+    if(info){
+      tooltip.style.display = 'block';
+      tooltip.style.left = (e.clientX+20)+'px';
+      tooltip.style.top = (e.clientY-20)+'px';
+      tooltip.innerHTML = `
+        <div class="tt-name" style="color:${info.color}">${info.name}</div>
+        <div class="tt-func">${currentMode==='anatomy'?info.func:'<b>机制替换：</b>'+info.tech}</div>
+        ${currentMode==='tech'?`<div class="tt-tech">📦 ${info.source}</div>`:''}
+      `;
+      document.body.style.cursor = 'pointer';
+    }
+  } else {
+    tooltip.style.display = 'none';
+    document.body.style.cursor = '';
+  }
+});
+
+// ── Mode switching ──
+window.switchMode = function(mode) {
+  currentMode = mode;
+  document.getElementById('btn-anatomy').classList.toggle('active', mode==='anatomy');
+  document.getElementById('btn-tech').classList.toggle('active', mode==='tech');
+  document.getElementById('main-title').textContent = mode==='anatomy' ? '🧠 人类大脑三维结构' : '⚙️ 技术机制替换';
+  document.getElementById('main-sub').textContent = mode==='anatomy' ? '拖拽旋转 · 滚轮缩放 · 右键平移 · 悬停查看详情' : '开源项目替身 · 拖拽旋转 · 悬停看技术栈';
+  
+  structures.forEach(s => {
+    s.mesh.material = mode==='anatomy' ? s.anatMat : s.techMat;
+  });
+  
+  // Update labels
+  lblGroup.children.forEach(child => {
+    if(child.userData && child.userData.key && mode==='tech'){
+      const tk = child.userData.key;
+      const tl = techLabels[tk];
+      if(tl){
+        child.element.textContent = tl;
+        child.element.style.color = '#fff';
+        child.element.style.fontSize = '0.45em';
+      }
+    } else if(child.userData && child.userData.key){
+      const orig = labels.find(l=>l.key===child.userData.key);
+      if(orig){
+        child.element.textContent = orig.text;
+        child.element.style.color = orig.color;
+        child.element.style.fontSize = orig.size;
+      }
+    }
+  });
+  
+  updateLegend(mode);
+  tooltip.style.display = 'none';
+};
+
+function updateLegend(mode) {
+  const legend = document.getElementById('legend');
+  const items = mode==='anatomy' ? [
+    {color:'#5588dd',label:'额叶 计划决策'},{color:'#44aa66',label:'顶叶 注意力'},
+    {color:'#ddaa33',label:'颞叶 识别'},{color:'#dd5544',label:'枕叶 视觉'},
+    {color:'#9966ff',label:'丘脑 路由'},{color:'#ff3355',label:'杏仁核 预警'},
+    {color:'#6699cc',label:'海马体 记忆'},{color:'#ff9944',label:'扣带回 冲突'},
+    {color:'#44cc88',label:'前岛叶 切换'},{color:'#cc9944',label:'基底节 RL'},
+    {color:'#cc7755',label:'小脑 优化'},{color:'#44bb77',label:'运动皮层 执行'},
+  ] : [
+    {color:'#ff2040',label:'杏仁核→NeMo-Guard'},{color:'#8855ff',label:'丘脑→Hermes GW'},
+    {color:'#4488ee',label:'额叶→LangGraph+AutoGen'},{color:'#33cc55',label:'顶叶→Letta+Mem0'},
+    {color:'#ee9922',label:'颞叶→LlamaIndex+Neo4j'},{color:'#44aadd',label:'海马体→Letta+Chroma'},
+    {color:'#ff8822',label:'扣带回→ECA+HF NLI'},{color:'#22dd66',label:'突显→🔧自研FSM'},
+    {color:'#dd8822',label:'基底节→ECA RL'},{color:'#22cc55',label:'运动→Hermes+MCP'},
+  ];
+  legend.innerHTML = items.map(i=>`<div class="leg-item"><div class="leg-dot" style="background:${i.color};box-shadow:0 0 6px ${i.color}"></div>${i.label}</div>`).join('');
+}
+
+updateLegend('anatomy');
+
+// ── Animation loop ──
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  
+  // Gentle particle drift
+  particles.rotation.y += 0.0002;
+  particles.rotation.x += 0.0001;
+  
+  // Pulsing amygdala glow
+  const t = Date.now()*0.001;
+  const pulse = 0.7 + Math.sin(t*2)*0.3;
+  if(currentMode==='anatomy'){
+    matAmygdala.emissiveIntensity = pulse*0.6;
+  } else {
+    techAmygdala.emissiveIntensity = pulse*1.2;
+  }
+  
+  renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
+}
+
+// ── Resize ──
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth,window.innerHeight);
+  labelRenderer.setSize(window.innerWidth,window.innerHeight);
+});
+
+animate();
+
+// Initial camera orbit
+setTimeout(()=>{controls.autoRotate=true;},500);
+</script>
+</body>
+</html>
